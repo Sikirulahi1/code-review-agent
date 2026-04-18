@@ -34,10 +34,11 @@ class Settings(BaseSettings):
         database_name = quote(self.supabase_db_name, safe="")
         user = quote(self.supabase_db_user, safe="")
         sslmode = quote(self.supabase_sslmode, safe="")
+        ssl_param = "ssl" if driver == "asyncpg" else "sslmode"
 
         return (
             f"postgresql+{driver}://{user}:{password}@{host}:{port}/{database_name}"
-            f"?sslmode={sslmode}"
+            f"?{ssl_param}={sslmode}"
         )
 
     @property
