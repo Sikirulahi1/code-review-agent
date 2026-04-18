@@ -29,6 +29,21 @@ class Settings(BaseSettings):
     db_pool_size: int = 5
     db_max_overflow: int = 10
 
+    # GitHub integration settings.
+    github_token: SecretStr | None = None
+    github_webhook_secret: SecretStr | None = None
+    comment_backoff_max_seconds: int = 60
+    github_retry_attempts: int = 5
+
+    # LLM settings.
+    gemini_api_key: SecretStr | None = None
+    openai_api_key: SecretStr | None = None
+    gemini_model: str = "gemini-2.5-pro"
+    openai_model: str = "gpt-4o"
+    llm_timeout_seconds: int = 30
+    llm_retry_attempts: int = 3
+    llm_backoff_max_seconds: int = 60
+
     def _build_postgres_url(self, *, driver: str, host: str, port: int) -> str:
         password = quote(self.supabase_db_password.get_secret_value(), safe="")
         database_name = quote(self.supabase_db_name, safe="")
