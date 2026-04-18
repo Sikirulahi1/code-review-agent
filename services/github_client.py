@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -10,6 +9,7 @@ from typing import Any
 from github import Github
 
 from config import settings
+from utils.retry import run_with_exponential_backoff
 
 LOGGER = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class GitHubClient:
 	def fetch_pr_patches(self, repo_full_name: str, pr_number: int) -> dict[str, str]:
 		repo = self._github.get_repo(repo_full_name)
 		pr = repo.get_pull(pr_number)
-		cache_key = pr.head.sha
+		cache_key = f"{repo_full_name}#{pr_number}@{pr.head.sha}"
 		if cache_key in self._diff_cache:
 			return self._diff_cache[cache_key]
 
@@ -80,8 +80,9 @@ class GitHubClient:
 
 	def flush_comment_queue(self) -> None:
 		while self._comment_queue:
-			queued = self._comment_queue.popleft()
+			queued = self._comment_queue[0]
 			self._with_backoff(lambda: self._post_inline_comment_now(queued))
+			self._comment_queue.popleft()
 
 	def create_summary_review(
 		self,
@@ -97,12 +98,17 @@ class GitHubClient:
 	def _post_inline_comment_now(self, queued: QueuedComment) -> Any:
 		repo = self._github.get_repo(queued.repo_full_name)
 		pr = repo.get_pull(queued.pr_number)
+
+		if queued.in_reply_to is not None:
+			return pr.create_review_comment_reply(queued.in_reply_to, queued.body)
+
+		commit = repo.get_commit(queued.commit_id)
 		return pr.create_review_comment(
 			body=queued.body,
-			commit=queued.commit_id,
+			commit=commit,
 			path=queued.path,
-			position=queued.position,
-			in_reply_to=queued.in_reply_to,
+			line=queued.position,
+			side="RIGHT",
 		)
 
 	def _create_summary_review_now(
@@ -117,20 +123,14 @@ class GitHubClient:
 		return pr.create_review(body=body, event=event)
 
 	def _with_backoff(self, operation: Callable[[], Any]) -> Any:
-		delay = 1
-		for attempt in range(1, self._retry_attempts + 1):
-			try:
-				return operation()
-			except Exception as exc:
-				if attempt == self._retry_attempts or not self._should_retry(exc):
-					raise
-
-				wait_seconds = min(delay, self._backoff_max_seconds)
-				LOGGER.warning("GitHub write retry in %ss (attempt %s)", wait_seconds, attempt)
-				time.sleep(wait_seconds)
-				delay = min(delay * 2, self._backoff_max_seconds)
-
-		raise RuntimeError("unreachable")
+		return run_with_exponential_backoff(
+			operation,
+			retry_attempts=self._retry_attempts,
+			backoff_max_seconds=float(self._backoff_max_seconds),
+			should_retry=self._should_retry,
+			logger=LOGGER,
+			retry_log_template="GitHub write retry in %ss (attempt %s)",
+		)
 
 	@staticmethod
 	def _should_retry(exc: Exception) -> bool:

@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import json
 import logging
-import random
-import time
 from collections.abc import Callable
 from typing import Any
 
@@ -11,6 +8,8 @@ import google.generativeai as genai
 from openai import OpenAI
 
 from config import settings
+from utils.llm_payload import build_untrusted_diff_user_content, parse_findings_payload
+from utils.retry import run_with_exponential_backoff
 
 LOGGER = logging.getLogger(__name__)
 
@@ -35,29 +34,44 @@ class LLMClient:
 		if self._gemini_api_key:
 			genai.configure(api_key=self._gemini_api_key)
 
-	def request_text(self, prompt: str, system_prompt: str | None = None) -> str:
+	def request_text(self, user_content: str, system_prompt: str | None = None) -> str:
 		try:
-			return self._retry(lambda: self._call_gemini(prompt, system_prompt))
+			return self._retry(lambda: self._call_gemini(user_content, system_prompt))
 		except Exception as gemini_exc:
 			LOGGER.warning("Gemini failed, falling back to OpenAI: %s", gemini_exc)
-			return self._retry(lambda: self._call_openai(prompt, system_prompt))
+			return self._retry(lambda: self._call_openai(user_content, system_prompt))
+
+	def request_text_from_diff(
+		self,
+		diff_content: str,
+		system_prompt: str,
+		task_instruction: str | None = None,
+	) -> str:
+		user_content = build_untrusted_diff_user_content(diff_content, task_instruction)
+		return self.request_text(user_content, system_prompt)
 
 	def request_findings(
 		self,
-		prompt: str,
+		user_content: str,
 		system_prompt: str | None = None,
 	) -> list[dict[str, Any]]:
 		try:
-			response_text = self.request_text(prompt, system_prompt)
-			parsed = json.loads(response_text)
-			if isinstance(parsed, list):
-				return [item for item in parsed if isinstance(item, dict)]
-			return []
+			response_text = self.request_text(user_content, system_prompt)
+			return parse_findings_payload(response_text)
 		except Exception as exc:
 			LOGGER.warning("LLM request failed; returning empty findings: %s", exc)
 			return []
 
-	def _call_gemini(self, prompt: str, system_prompt: str | None = None) -> str:
+	def request_findings_from_diff(
+		self,
+		diff_content: str,
+		system_prompt: str,
+		task_instruction: str | None = None,
+	) -> list[dict[str, Any]]:
+		user_content = build_untrusted_diff_user_content(diff_content, task_instruction)
+		return self.request_findings(user_content, system_prompt)
+
+	def _call_gemini(self, user_content: str, system_prompt: str | None = None) -> str:
 		if not self._gemini_api_key:
 			raise RuntimeError("GEMINI_API_KEY is not configured")
 
@@ -66,7 +80,7 @@ class LLMClient:
 			system_instruction=system_prompt,
 		)
 		response = model.generate_content(
-			prompt,
+			user_content,
 			request_options={"timeout": self._timeout_seconds},
 		)
 		text = getattr(response, "text", None)
@@ -74,14 +88,14 @@ class LLMClient:
 			raise RuntimeError("Gemini returned an empty response")
 		return text
 
-	def _call_openai(self, prompt: str, system_prompt: str | None = None) -> str:
+	def _call_openai(self, user_content: str, system_prompt: str | None = None) -> str:
 		if not self._openai:
 			raise RuntimeError("OPENAI_API_KEY is not configured")
 
 		messages: list[dict[str, str]] = []
 		if system_prompt:
 			messages.append({"role": "system", "content": system_prompt})
-		messages.append({"role": "user", "content": prompt})
+		messages.append({"role": "user", "content": user_content})
 
 		response = self._openai.chat.completions.create(
 			model=self._openai_model,
@@ -94,20 +108,13 @@ class LLMClient:
 		return text
 
 	def _retry(self, operation: Callable[[], str]) -> str:
-		delay = 1.0
-		for attempt in range(1, self._retry_attempts + 1):
-			try:
-				return operation()
-			except Exception as exc:
-				if attempt == self._retry_attempts or not self._should_retry(exc):
-					raise
-
-				jitter = random.uniform(0, 0.25)
-				wait_seconds = min(delay + jitter, float(self._backoff_max_seconds))
-				time.sleep(wait_seconds)
-				delay = min(delay * 2, float(self._backoff_max_seconds))
-
-		raise RuntimeError("unreachable")
+		return run_with_exponential_backoff(
+			operation,
+			retry_attempts=self._retry_attempts,
+			backoff_max_seconds=float(self._backoff_max_seconds),
+			should_retry=self._should_retry,
+			jitter_max_seconds=0.25,
+		)
 
 	@staticmethod
 	def _should_retry(exc: Exception) -> bool:
