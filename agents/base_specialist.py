@@ -5,6 +5,7 @@ from typing import Any
 
 from agents.prompt_loader import load_prompt
 from services.llm_client import LLMClient
+from utils.llm_payload import build_untrusted_diff_user_content, parse_findings_payload
 
 
 class BaseSpecialistAgent:
@@ -23,14 +24,19 @@ class BaseSpecialistAgent:
 
     @property
     def agent_name(self) -> str:
+        if hasattr(self, "_forced_agent_name"):
+            return getattr(self, "_forced_agent_name")
         return self.__class__.__name__.replace("Agent", "").lower()
 
     def review_file_patch(self, file_path: str, patch: str) -> list[dict[str, Any]]:
-        findings = self._llm_client.request_findings_from_diff(
-            diff_content=patch,
+        user_content = build_untrusted_diff_user_content(patch, self._task_instruction)
+        
+        response_text = self._llm_client.request_text(
+            user_content=user_content,
             system_prompt=self._prompt_text,
-            task_instruction=self._task_instruction,
         )
+        
+        findings = parse_findings_payload(response_text)
 
         normalized: list[dict[str, Any]] = []
         for finding in findings:

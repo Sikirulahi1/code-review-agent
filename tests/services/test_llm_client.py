@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from services.llm_client import LLMClient, build_untrusted_diff_user_content
+from services.llm_client import LLMClient
+from utils.llm_payload import build_untrusted_diff_user_content
 
 
 def test_request_text_falls_back_to_openai(monkeypatch) -> None:
@@ -22,7 +23,7 @@ def test_request_findings_parses_json_list(monkeypatch) -> None:
 	monkeypatch.setattr(
 		client,
 		"request_text",
-		lambda *_args, **_kwargs: '[{"title": "A"}, {"title": "B"}]',
+		lambda *_args, **_kwargs: '[{"title": "A", "description": "desc_a"}, {"title": "B", "description": "desc_b"}]',
 	)
 
 	findings = client.request_findings("prompt")
@@ -44,7 +45,7 @@ def test_request_findings_parses_fenced_json(monkeypatch) -> None:
 	monkeypatch.setattr(
 		client,
 		"request_text",
-		lambda *_args, **_kwargs: "```json\n[{\"title\": \"A\"}]\n```",
+		lambda *_args, **_kwargs: "```json\n[{\"title\": \"A\", \"description\": \"desc\"}]\n```",
 	)
 
 	findings = client.request_findings("prompt")
@@ -58,7 +59,7 @@ def test_request_findings_parses_prose_wrapped_json_array(monkeypatch) -> None:
 	monkeypatch.setattr(
 		client,
 		"request_text",
-		lambda *_args, **_kwargs: "Here are findings:\n[{\"title\": \"B\"}]\nThanks.",
+		lambda *_args, **_kwargs: "Here are findings:\n[{\"title\": \"B\", \"description\": \"desc\"}]\nThanks.",
 	)
 
 	findings = client.request_findings("prompt")
@@ -72,7 +73,7 @@ def test_request_findings_parses_findings_key_from_json_object(monkeypatch) -> N
 	monkeypatch.setattr(
 		client,
 		"request_text",
-		lambda *_args, **_kwargs: '{"findings": [{"title": "C"}]}',
+		lambda *_args, **_kwargs: '{"findings": [{"title": "C", "description": "desc"}]}',
 	)
 
 	findings = client.request_findings("prompt")
@@ -89,27 +90,3 @@ def test_build_untrusted_diff_user_content_wraps_diff_and_guardrails() -> None:
 	assert "<diff>" in content
 	assert "</diff>" in content
 	assert "+print('hello')" in content
-
-
-def test_request_text_from_diff_uses_wrapped_user_content(monkeypatch) -> None:
-	client = LLMClient(openai_client=object())
-
-	captured: dict[str, str | None] = {"user_content": None, "system_prompt": None}
-
-	def fake_request_text(user_content: str, system_prompt: str | None = None) -> str:
-		captured["user_content"] = user_content
-		captured["system_prompt"] = system_prompt
-		return "ok"
-
-	monkeypatch.setattr(client, "request_text", fake_request_text)
-
-	result = client.request_text_from_diff(
-		diff_content="+print('hello')",
-		system_prompt="System rules",
-	)
-
-	assert result == "ok"
-	assert captured["system_prompt"] == "System rules"
-	assert captured["user_content"] is not None
-	assert "<diff>" in str(captured["user_content"])
-	assert "</diff>" in str(captured["user_content"])

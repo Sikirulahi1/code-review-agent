@@ -2,7 +2,20 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, Optional, List, Dict
+from pydantic import BaseModel, Field, ValidationError
+
+class FindingSchema(BaseModel):
+    title: str = Field(max_length=500)
+    description: str
+    severity: int = Field(ge=1, le=5, default=3)
+    category: Optional[str] = None
+    suggestion: Optional[str] = None
+    code_fix: Optional[str] = None
+    file_path: Optional[str] = None
+    line_start: Optional[int] = Field(None, ge=1)
+    line_end: Optional[int] = Field(None, ge=1)
+    diff_position: Optional[int] = Field(None, ge=1)
 
 
 def build_untrusted_diff_user_content(diff_content: str, task_instruction: str | None = None) -> str:
@@ -60,11 +73,27 @@ def parse_findings_payload(response_text: str) -> list[dict[str, Any]]:
             continue
 
         if isinstance(parsed, list):
-            return [item for item in parsed if isinstance(item, dict)]
+            valid_findings = []
+            for item in parsed:
+                if isinstance(item, dict):
+                    try:
+                        valid_findings.append(FindingSchema(**item).model_dump(exclude_none=True))
+                    except ValidationError:
+                        continue
+            if valid_findings:
+                return valid_findings
 
         if isinstance(parsed, dict):
             findings = parsed.get("findings")
             if isinstance(findings, list):
-                return [item for item in findings if isinstance(item, dict)]
+                valid_findings = []
+                for item in findings:
+                    if isinstance(item, dict):
+                        try:
+                            valid_findings.append(FindingSchema(**item).model_dump(exclude_none=True))
+                        except ValidationError:
+                            continue
+                if valid_findings:
+                    return valid_findings
 
     return []

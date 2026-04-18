@@ -8,7 +8,7 @@ import google.generativeai as genai
 from openai import OpenAI
 
 from config import settings
-from utils.llm_payload import build_untrusted_diff_user_content, parse_findings_payload
+from utils.llm_payload import parse_findings_payload
 from utils.retry import run_with_exponential_backoff
 
 LOGGER = logging.getLogger(__name__)
@@ -41,15 +41,6 @@ class LLMClient:
 			LOGGER.warning("Gemini failed, falling back to OpenAI: %s", gemini_exc)
 			return self._retry(lambda: self._call_openai(user_content, system_prompt))
 
-	def request_text_from_diff(
-		self,
-		diff_content: str,
-		system_prompt: str,
-		task_instruction: str | None = None,
-	) -> str:
-		user_content = build_untrusted_diff_user_content(diff_content, task_instruction)
-		return self.request_text(user_content, system_prompt)
-
 	def request_findings(
 		self,
 		user_content: str,
@@ -61,15 +52,6 @@ class LLMClient:
 		except Exception as exc:
 			LOGGER.warning("LLM request failed; returning empty findings: %s", exc)
 			return []
-
-	def request_findings_from_diff(
-		self,
-		diff_content: str,
-		system_prompt: str,
-		task_instruction: str | None = None,
-	) -> list[dict[str, Any]]:
-		user_content = build_untrusted_diff_user_content(diff_content, task_instruction)
-		return self.request_findings(user_content, system_prompt)
 
 	def _call_gemini(self, user_content: str, system_prompt: str | None = None) -> str:
 		if not self._gemini_api_key:
