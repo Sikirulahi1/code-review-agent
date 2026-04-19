@@ -1,8 +1,14 @@
 alembic==1.15.2
 asyncpg==0.30.0
 fastapi==0.115.12
+google-generativeai==0.8.5
+langchain==1.2.15
+langgraph==1.1.8
+openai==1.75.0
+PyGithub==2.3.0
 pydantic-settings==2.8.1
 psycopg[binary]==3.2.6
+pytest==8.3.5
 python-dotenv==1.1.0
 SQLAlchemy==2.0.40
 sqlmodel==0.0.24
